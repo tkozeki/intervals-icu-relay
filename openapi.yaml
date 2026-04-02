@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Intervals ICU Relay API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Relay API for ChatGPT Actions.
     ChatGPT authenticates to this API with a Bearer token.
@@ -9,11 +9,14 @@ info:
 servers:
   - url: https://intervals-icu-relay.onrender.com
     description: Render production URL
+
 components:
+  schemas: {}
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
+
 paths:
   /healthz:
     get:
@@ -27,15 +30,12 @@ paths:
             application/json:
               schema:
                 type: object
-                properties:
-                  status:
-                    type: string
-                    example: ok
+                additionalProperties: true
+
   /intervals/activities:
     get:
       operationId: getActivities
       summary: Get activities from Intervals.icu
-      description: Retrieves activities for the authenticated athlete between the start and end dates.
       security:
         - bearerAuth: []
       parameters:
@@ -63,15 +63,11 @@ paths:
                 items:
                   type: object
                   additionalProperties: true
-        '401':
-          description: Missing or invalid bearer token
-        '502':
-          description: Upstream Intervals.icu error
+
   /intervals/wellness:
     get:
       operationId: getWellness
       summary: Get wellness entries from Intervals.icu
-      description: Retrieves wellness entries for the authenticated athlete between the start and end dates.
       security:
         - bearerAuth: []
       parameters:
@@ -79,6 +75,154 @@ paths:
           in: query
           required: true
           description: Start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          description: End date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Wellness entries fetched successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+
+  /analysis/training-quality:
+    get:
+      operationId: analyzeTrainingQuality
+      summary: Analyze training quality for a date range
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: start
+          in: query
+          required: true
+          description: Start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          description: End date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Training quality analysis result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /analysis/workout-quality:
+    get:
+      operationId: analyzeWorkoutQuality
+      summary: Analyze workout quality in a date range
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: start
+          in: query
+          required: true
+          description: Start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          description: End date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Workout quality analysis result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /analysis/endurance-efficiency:
+    get:
+      operationId: analyzeEnduranceEfficiency
+      summary: Analyze endurance efficiency in a date range
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: start
+          in: query
+          required: true
+          description: Start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          description: End date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Endurance efficiency analysis result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /analysis/training-quality-timeseries:
+    get:
+      operationId: analyzeTrainingQualityTimeseries
+      summary: Analyze training quality over time
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: start
+          in: query
+          required: true
+          description: Start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          description: End date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: granularity
+          in: query
+          required: false
+          description: day or week
+          schema:
+            type: string
+            enum: [day, week]
+            default: week
+      responses:
+        '200':
+          description: Time series quality analysis result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true          description: Start date in YYYY-MM-DD
           schema:
             type: string
             format: date
