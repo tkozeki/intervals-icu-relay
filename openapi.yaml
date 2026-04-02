@@ -1,0 +1,167 @@
+openapi: 3.1.0
+info:
+  title: Intervals ICU Relay API
+  version: 1.0.0
+  description: |
+    Relay API for ChatGPT Actions.
+    ChatGPT authenticates to this API with a Bearer token.
+    This API then calls Intervals.icu using Basic authentication.
+servers:
+  - url: https://YOUR-RENDER-SERVICE.onrender.com
+    description: Render production URL
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      description: Returns API health status.
+      responses:
+        '200':
+          description: Successful health response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /intervals/activities:
+    get:
+      operationId: getActivities
+      summary: Get activities from Intervals.icu
+      description: Retrieves activities for the authenticated athlete between the start and end dates.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: start
+          in: query
+          required: true
+          description: Start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          description: End date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Activities fetched successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        '401':
+          description: Missing or invalid bearer token
+        '502':
+          description: Upstream Intervals.icu error
+  /intervals/wellness:
+    get:
+      operationId: getWellness
+      summary: Get wellness entries from Intervals.icu
+      description: Retrieves wellness entries for the authenticated athlete between the start and end dates.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: start
+          in: query
+          required: true
+          description: Start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          description: End date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Wellness entries fetched successfully
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        '401':
+          description: Missing or invalid bearer token
+        '502':
+          description: Upstream Intervals.icu error
+  /analysis/training-quality:
+    get:
+      operationId: analyzeTrainingQuality
+      summary: Analyze training quality for a date range
+      description: |
+        Fetches activities and wellness entries, filters to activities with moving_time,
+        counts high-load days using icu_training_load >= 60,
+        and returns a simple training quality summary.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: start
+          in: query
+          required: true
+          description: Start date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          description: End date in YYYY-MM-DD
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Analysis generated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: string
+                    example: 2026-03-25〜2026-03-31に 6 セッション、総運動時間は約 4.0 時間です。
+                  quality_score:
+                    type: integer
+                    example: 90
+                  strengths:
+                    type: array
+                    items:
+                      type: string
+                  concerns:
+                    type: array
+                    items:
+                      type: string
+                  raw_counts:
+                    type: object
+                    properties:
+                      sessions:
+                        type: integer
+                      high_load_days:
+                        type: integer
+                      total_duration_seconds:
+                        type: integer
+                      wellness_entries:
+                        type: integer
+        '401':
+          description: Missing or invalid bearer token
+        '502':
+          description: Upstream Intervals.icu error
