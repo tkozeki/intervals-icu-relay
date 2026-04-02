@@ -7,7 +7,7 @@ info:
     ChatGPT authenticates to this API with a Bearer token.
     This API then calls Intervals.icu using Basic authentication.
 servers:
-  - url: https://YOUR-RENDER-SERVICE.onrender.com
+  - url: https://intervals-icu-relay.onrender.com
     description: Render production URL
 components:
   securitySchemes:
