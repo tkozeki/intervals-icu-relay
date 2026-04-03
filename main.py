@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import math
 import os
+import statistics
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel, Field, model_validator
 from requests.auth import HTTPBasicAuth
 
 app = FastAPI(
     title="Intervals.icu Relay API",
-    version="0.3.1",
+    version="0.4.0",
 )
 
 
@@ -102,6 +104,78 @@ def parse_date_yyyy_mm_dd(value: str) -> date:
 
 
 # =========================
+# Models
+# =========================
+
+class WorkoutBlock(BaseModel):
+    start_sec: int = Field(..., ge=0, description="Block start time in seconds from activity start")
+    end_sec: int = Field(..., gt=0, description="Block end time in seconds from activity start")
+    label: Optional[str] = Field(default=None, description="Optional block label")
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.end_sec <= self.start_sec:
+            raise ValueError("end_sec must be greater than start_sec")
+        return self
+
+
+class WorkoutBlockQualityRequest(BaseModel):
+    activity_id: str = Field(..., description="Intervals.icu activity ID")
+    blocks: list[WorkoutBlock] = Field(..., min_length=1, description="User-specified blocks for analysis")
+
+
+class BlockAnalysisResult(BaseModel):
+    index: int
+    label: str
+    start_sec: int
+    end_sec: int
+    duration_sec: int
+    avg_power: Optional[float] = None
+    avg_hr: Optional[float] = None
+    avg_cadence: Optional[float] = None
+    avg_speed_mps: Optional[float] = None
+    ef: Optional[float] = None
+    power_cv: Optional[float] = None
+    hr_cv: Optional[float] = None
+    cadence_cv: Optional[float] = None
+    power_variation_pct: Optional[float] = None
+    negative_split_power_pct: Optional[float] = None
+    negative_split_hr_pct: Optional[float] = None
+    drift_pct: Optional[float] = None
+    decoupling_pct: Optional[float] = None
+    stability_score: Optional[float] = None
+    block_quality_label: Optional[str] = None
+
+
+class BlockDropItem(BaseModel):
+    label: str
+    drop_pct: Optional[float] = None
+
+
+class BetweenBlockComparison(BaseModel):
+    power_drop_from_first_pct: list[BlockDropItem]
+    ef_drop_from_first_pct: list[BlockDropItem]
+
+
+class BlockSummary(BaseModel):
+    best_block_label: Optional[str] = None
+    worst_block_label: Optional[str] = None
+    consistency_assessment: Optional[str] = None
+    overall_block_quality: Optional[str] = None
+
+
+class WorkoutBlockQualityResponse(BaseModel):
+    activity_id: str
+    analysis_basis: str
+    available_streams: list[str]
+    block_count: int
+    blocks_analyzed: list[BlockAnalysisResult]
+    between_block_comparison: Optional[BetweenBlockComparison] = None
+    summary: Optional[BlockSummary] = None
+    limitations: list[str]
+
+
+# =========================
 # Utility
 # =========================
 
@@ -126,6 +200,31 @@ def _safe_mean(xs: list[float]) -> float | None:
     if not vals:
         return None
     return sum(vals) / len(vals)
+
+
+def _safe_std(xs: list[float]) -> float | None:
+    vals = [x for x in xs if not math.isnan(x)]
+    if len(vals) < 2:
+        return 0.0
+    return statistics.pstdev(vals)
+
+
+def _safe_cv(xs: list[float]) -> float | None:
+    mean_v = _safe_mean(xs)
+    if mean_v is None or mean_v == 0:
+        return None
+    std_v = _safe_std(xs)
+    if std_v is None:
+        return None
+    return std_v / mean_v
+
+
+def _round_or_none(value: float | None, digits: int = 3) -> float | None:
+    if value is None:
+        return None
+    if math.isnan(value) or math.isinf(value):
+        return None
+    return round(value, digits)
 
 
 def _pct_change(old: float | None, new: float | None) -> float | None:
@@ -362,6 +461,268 @@ def _fetch_wellness(start: str, end: str) -> list[dict[str, Any]]:
                 return [x for x in v if isinstance(x, dict)]
 
     return []
+
+
+# =========================
+# Block analysis helpers
+# =========================
+
+REQUIRED_BLOCK_STREAMS = {"time", "watts", "heartrate"}
+
+
+def _slice_stream_by_time(
+    time_stream: list[float],
+    value_stream: list[float] | None,
+    start_sec: int,
+    end_sec: int,
+) -> list[float]:
+    if not value_stream:
+        return []
+
+    out: list[float] = []
+    n = min(len(time_stream), len(value_stream))
+    for i in range(n):
+        t = time_stream[i]
+        v = value_stream[i]
+        if math.isnan(t) or math.isnan(v):
+            continue
+        if start_sec <= t < end_sec:
+            out.append(v)
+    return out
+
+
+def _split_block_stream(
+    time_stream: list[float],
+    value_stream: list[float] | None,
+    start_sec: int,
+    end_sec: int,
+) -> dict[str, list[float]]:
+    if not value_stream:
+        return {"first": [], "second": []}
+
+    mid = start_sec + (end_sec - start_sec) / 2.0
+    first_half: list[float] = []
+    second_half: list[float] = []
+
+    n = min(len(time_stream), len(value_stream))
+    for i in range(n):
+        t = time_stream[i]
+        v = value_stream[i]
+        if math.isnan(t) or math.isnan(v):
+            continue
+        if start_sec <= t < end_sec:
+            if t < mid:
+                first_half.append(v)
+            else:
+                second_half.append(v)
+
+    return {"first": first_half, "second": second_half}
+
+
+def _compute_stability_score(
+    duration_sec: int,
+    power_variation_pct: float | None,
+    decoupling_pct: float | None,
+    cadence_cv: float | None,
+) -> float | None:
+    score = 100.0
+
+    if power_variation_pct is not None:
+        score -= min(max(power_variation_pct, 0.0), 20.0) * 2.0
+
+    if decoupling_pct is not None:
+        score -= min(abs(decoupling_pct), 15.0) * 2.5
+
+    if cadence_cv is not None:
+        score -= min(cadence_cv * 100.0, 15.0) * 1.2
+
+    if duration_sec < 300:
+        score -= 10.0
+    elif duration_sec < 600:
+        score -= 4.0
+
+    return max(0.0, min(100.0, score))
+
+
+def _label_block_quality(stability_score: float | None, decoupling_pct: float | None) -> str | None:
+    if stability_score is None:
+        return None
+
+    dec = abs(decoupling_pct) if decoupling_pct is not None else None
+
+    if stability_score >= 85 and (dec is None or dec <= 5):
+        return "good"
+    if stability_score >= 70 and (dec is None or dec <= 8):
+        return "acceptable"
+    if stability_score >= 55:
+        return "mixed"
+    return "poor"
+
+
+def _analyze_single_block(
+    index: int,
+    block: WorkoutBlock,
+    smap: dict[str, list[float]],
+) -> BlockAnalysisResult:
+    label = block.label or f"block_{index + 1}"
+
+    time_stream = smap.get("time", [])
+    watts_stream = smap.get("watts", [])
+    hr_stream = smap.get("heartrate", [])
+    cadence_stream = smap.get("cadence", [])
+    speed_stream = smap.get("velocity_smooth", [])
+
+    watts = _slice_stream_by_time(time_stream, watts_stream, block.start_sec, block.end_sec)
+    hrs = _slice_stream_by_time(time_stream, hr_stream, block.start_sec, block.end_sec)
+    cads = _slice_stream_by_time(time_stream, cadence_stream, block.start_sec, block.end_sec)
+    speeds = _slice_stream_by_time(time_stream, speed_stream, block.start_sec, block.end_sec)
+
+    duration_sec = block.end_sec - block.start_sec
+
+    avg_power = _safe_mean(watts)
+    avg_hr = _safe_mean(hrs)
+    avg_cadence = _safe_mean(cads) if cads else None
+    avg_speed = _safe_mean(speeds) if speeds else None
+
+    ef = None
+    if avg_power is not None and avg_hr not in (None, 0):
+        ef = avg_power / avg_hr
+
+    power_cv = _safe_cv(watts)
+    hr_cv = _safe_cv(hrs)
+    cadence_cv = _safe_cv(cads) if cads else None
+    power_variation_pct = (power_cv * 100.0) if power_cv is not None else None
+
+    watts_halves = _split_block_stream(time_stream, watts_stream, block.start_sec, block.end_sec)
+    hr_halves = _split_block_stream(time_stream, hr_stream, block.start_sec, block.end_sec)
+
+    first_power = _safe_mean(watts_halves["first"])
+    second_power = _safe_mean(watts_halves["second"])
+    first_hr = _safe_mean(hr_halves["first"])
+    second_hr = _safe_mean(hr_halves["second"])
+
+    negative_split_power_pct = _pct_change(first_power, second_power)
+    negative_split_hr_pct = _pct_change(first_hr, second_hr)
+
+    ef_first = None
+    ef_second = None
+    if first_power is not None and first_hr not in (None, 0):
+        ef_first = first_power / first_hr
+    if second_power is not None and second_hr not in (None, 0):
+        ef_second = second_power / second_hr
+
+    drift_pct = _pct_change(ef_first, ef_second)
+    decoupling_pct = None if drift_pct is None else -drift_pct
+
+    stability_score = _compute_stability_score(
+        duration_sec=duration_sec,
+        power_variation_pct=power_variation_pct,
+        decoupling_pct=decoupling_pct,
+        cadence_cv=cadence_cv,
+    )
+
+    block_quality_label = _label_block_quality(stability_score, decoupling_pct)
+
+    return BlockAnalysisResult(
+        index=index,
+        label=label,
+        start_sec=block.start_sec,
+        end_sec=block.end_sec,
+        duration_sec=duration_sec,
+        avg_power=_round_or_none(avg_power, 1),
+        avg_hr=_round_or_none(avg_hr, 1),
+        avg_cadence=_round_or_none(avg_cadence, 1),
+        avg_speed_mps=_round_or_none(avg_speed, 2),
+        ef=_round_or_none(ef, 3),
+        power_cv=_round_or_none(power_cv, 3),
+        hr_cv=_round_or_none(hr_cv, 3),
+        cadence_cv=_round_or_none(cadence_cv, 3),
+        power_variation_pct=_round_or_none(power_variation_pct, 1),
+        negative_split_power_pct=_round_or_none(negative_split_power_pct, 1),
+        negative_split_hr_pct=_round_or_none(negative_split_hr_pct, 1),
+        drift_pct=_round_or_none(drift_pct, 1),
+        decoupling_pct=_round_or_none(decoupling_pct, 1),
+        stability_score=_round_or_none(stability_score, 1),
+        block_quality_label=block_quality_label,
+    )
+
+
+def _compute_between_block_comparison(results: list[BlockAnalysisResult]) -> BetweenBlockComparison | None:
+    if not results:
+        return None
+
+    first_power = results[0].avg_power
+    first_ef = results[0].ef
+
+    power_items: list[BlockDropItem] = []
+    ef_items: list[BlockDropItem] = []
+
+    for r in results:
+        power_items.append(
+            BlockDropItem(
+                label=r.label,
+                drop_pct=_round_or_none(_pct_change(first_power, r.avg_power), 1),
+            )
+        )
+        ef_items.append(
+            BlockDropItem(
+                label=r.label,
+                drop_pct=_round_or_none(_pct_change(first_ef, r.ef), 1),
+            )
+        )
+
+    return BetweenBlockComparison(
+        power_drop_from_first_pct=power_items,
+        ef_drop_from_first_pct=ef_items,
+    )
+
+
+def _compute_block_summary(results: list[BlockAnalysisResult]) -> BlockSummary | None:
+    if not results:
+        return None
+
+    scored = [r for r in results if r.stability_score is not None]
+    if not scored:
+        return BlockSummary(
+            best_block_label=None,
+            worst_block_label=None,
+            consistency_assessment="unknown",
+            overall_block_quality="unknown",
+        )
+
+    best_block = max(scored, key=lambda x: float(x.stability_score))
+    worst_block = min(scored, key=lambda x: float(x.stability_score))
+
+    scores = [float(r.stability_score) for r in scored if r.stability_score is not None]
+    spread = (max(scores) - min(scores)) if scores else None
+    avg_score = (sum(scores) / len(scores)) if scores else None
+
+    if spread is None:
+        consistency = "unknown"
+    elif spread <= 8:
+        consistency = "very_consistent"
+    elif spread <= 18:
+        consistency = "moderately_consistent"
+    else:
+        consistency = "moderate_fade"
+
+    if avg_score is None:
+        overall = "unknown"
+    elif avg_score >= 85:
+        overall = "good"
+    elif avg_score >= 70:
+        overall = "acceptable"
+    elif avg_score >= 55:
+        overall = "mixed"
+    else:
+        overall = "poor"
+
+    return BlockSummary(
+        best_block_label=best_block.label,
+        worst_block_label=worst_block.label,
+        consistency_assessment=consistency,
+        overall_block_quality=overall,
+    )
 
 
 # =========================
@@ -995,3 +1356,115 @@ def analyze_endurance_efficiency_detail(
             "Detailed EF/decoupling/HR drift should be checked per activity via workout-detail",
         ],
     }
+
+
+# =========================
+# New: block-level workout analysis
+# =========================
+
+@app.post("/analysis/workout-block-quality", response_model=WorkoutBlockQualityResponse)
+def analyze_workout_block_quality(
+    req: WorkoutBlockQualityRequest,
+    authorization: str | None = Header(default=None),
+):
+    verify_bearer(authorization)
+
+    sorted_blocks = sorted(req.blocks, key=lambda b: b.start_sec)
+
+    for i in range(1, len(sorted_blocks)):
+        prev = sorted_blocks[i - 1]
+        curr = sorted_blocks[i]
+        if curr.start_sec < prev.end_sec:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Blocks overlap: '{prev.label or f'block_{i}'}' and '{curr.label or f'block_{i+1}'}'",
+            )
+
+    r = intervals_get(
+        f"/activity/{req.activity_id}/streams.json",
+        params={"types": "time,watts,heartrate,cadence,velocity_smooth"},
+    )
+    payload = r.json()
+    smap = _extract_stream_map(payload)
+
+    available_streams = sorted([k for k, v in smap.items() if v])
+
+    missing_required = [s for s in REQUIRED_BLOCK_STREAMS if not smap.get(s)]
+    if missing_required:
+        return WorkoutBlockQualityResponse(
+            activity_id=req.activity_id,
+            analysis_basis="unavailable",
+            available_streams=available_streams,
+            block_count=len(sorted_blocks),
+            blocks_analyzed=[],
+            between_block_comparison=None,
+            summary=None,
+            limitations=[
+                "Required streams for block analysis are missing.",
+                f"Missing required streams: {', '.join(sorted(missing_required))}",
+                "Detailed block analysis requires at least time, watts, and heartrate.",
+                "Block boundaries are user-specified and not auto-detected.",
+            ],
+        )
+
+    time_stream = smap.get("time", [])
+    if not time_stream:
+        return WorkoutBlockQualityResponse(
+            activity_id=req.activity_id,
+            analysis_basis="unavailable",
+            available_streams=available_streams,
+            block_count=len(sorted_blocks),
+            blocks_analyzed=[],
+            between_block_comparison=None,
+            summary=None,
+            limitations=[
+                "time stream is empty.",
+                "Detailed block analysis requires non-empty time, watts, and heartrate streams.",
+            ],
+        )
+
+    max_time = max([t for t in time_stream if not math.isnan(t)], default=None)
+    if max_time is None:
+        return WorkoutBlockQualityResponse(
+            activity_id=req.activity_id,
+            analysis_basis="unavailable",
+            available_streams=available_streams,
+            block_count=len(sorted_blocks),
+            blocks_analyzed=[],
+            between_block_comparison=None,
+            summary=None,
+            limitations=[
+                "time stream contains no valid values.",
+                "Detailed block analysis requires valid time, watts, and heartrate streams.",
+            ],
+        )
+
+    for block in sorted_blocks:
+        if block.start_sec > max_time:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Block start_sec {block.start_sec} exceeds activity duration",
+            )
+
+    results: list[BlockAnalysisResult] = []
+    for idx, block in enumerate(sorted_blocks):
+        results.append(_analyze_single_block(idx, block, smap))
+
+    between = _compute_between_block_comparison(results)
+    summary = _compute_block_summary(results)
+
+    return WorkoutBlockQualityResponse(
+        activity_id=req.activity_id,
+        analysis_basis="streams",
+        available_streams=available_streams,
+        block_count=len(sorted_blocks),
+        blocks_analyzed=results,
+        between_block_comparison=between,
+        summary=summary,
+        limitations=[
+            "Block boundaries are user-specified and not auto-detected.",
+            "EF is calculated here as average power divided by average heart rate.",
+            "Drift/decoupling is estimated from first-half vs second-half block comparison.",
+            "This endpoint evaluates each block individually but does not infer workout intent automatically.",
+        ],
+    )
