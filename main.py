@@ -7,12 +7,12 @@ from typing import Any, Optional
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from requests.auth import HTTPBasicAuth
 
 app = FastAPI(
     title="Intervals.icu Relay API",
-    version="0.3.0",
+    version="0.3.1",
 )
 
 
@@ -42,6 +42,26 @@ def verify_bearer(authorization: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid bearer token")
 
 
+def _intervals_api_path(path: str) -> str:
+    """
+    INTERVALS_BASE_URL が
+    - https://intervals.icu
+    - https://intervals.icu/api/v1
+    のどちらでも動くように正規化する。
+    """
+    normalized = path if path.startswith("/") else f"/{path}"
+
+    if INTERVALS_BASE_URL.endswith("/api/v1"):
+        if normalized.startswith("/api/v1/"):
+            return normalized.removeprefix("/api/v1")
+        return normalized
+
+    if normalized.startswith("/api/v1/"):
+        return normalized
+
+    return f"/api/v1{normalized}"
+
+
 def intervals_get(
     path: str,
     *,
@@ -51,7 +71,7 @@ def intervals_get(
     if not INTERVALS_API_KEY:
         raise HTTPException(status_code=500, detail="INTERVALS_API_KEY is not configured")
 
-    url = f"{INTERVALS_BASE_URL}{path}"
+    url = f"{INTERVALS_BASE_URL}{_intervals_api_path(path)}"
     headers: dict[str, str] = {}
     if accept:
         headers["Accept"] = accept
@@ -191,16 +211,6 @@ def _coalesce_number(obj: dict[str, Any], keys: list[str]) -> float | None:
     return None
 
 
-def _coalesce_int(obj: dict[str, Any], keys: list[str]) -> int | None:
-    for key in keys:
-        if key in obj and obj[key] is not None:
-            try:
-                return int(float(obj[key]))
-            except (TypeError, ValueError):
-                continue
-    return None
-
-
 def _date_from_activity(activity: dict[str, Any]) -> str:
     for key in ["start_date_local", "start_date", "icu_training_load_date", "activity_date"]:
         value = activity.get(key)
@@ -267,7 +277,7 @@ def _simple_ef_from_summary(activity: dict[str, Any]) -> float | None:
 
 def _summarize_quality(activity: dict[str, Any]) -> dict[str, Any]:
     """
-    既存 workout-quality の簡易版を維持するための summary ベース評価。
+    summaryベース評価。
     """
     moving_time = _coalesce_number(activity, ["moving_time", "movingTime", "elapsed_time"]) or 0.0
     load = _coalesce_number(activity, ["icu_training_load", "training_load", "load"]) or 0.0
@@ -316,72 +326,57 @@ def _summarize_quality(activity: dict[str, Any]) -> dict[str, Any]:
 
 def _fetch_activities(start: str, end: str) -> list[dict[str, Any]]:
     """
-    既存構成との互換のため、複数候補パスを試す。
-    実際に使っているパスが固定なら1本に絞ってOK。
+    旧版で実際に動いていた取得方法に合わせる。
+    /athlete/0/activities + oldest/newest
     """
-    candidate_paths = [
-        "/api/v1/activities",
-        "/api/v1/activities.json",
-        "/api/v1/athlete/0/activities",
-        "/api/v1/athlete/0/activities.json",
-    ]
+    r = intervals_get("/athlete/0/activities", params={"oldest": start, "newest": end})
+    data = r.json()
 
-    last_error: HTTPException | None = None
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
 
-    for path in candidate_paths:
-        try:
-            r = intervals_get(path, params={"start": start, "end": end})
-            data = r.json()
-            if isinstance(data, list):
-                return [x for x in data if isinstance(x, dict)]
-            if isinstance(data, dict):
-                for key in ["activities", "data", "items"]:
-                    v = data.get(key)
-                    if isinstance(v, list):
-                        return [x for x in v if isinstance(x, dict)]
-        except HTTPException as e:
-            last_error = e
-            continue
+    if isinstance(data, dict):
+        for key in ["activities", "data", "items"]:
+            v = data.get(key)
+            if isinstance(v, list):
+                return [x for x in v if isinstance(x, dict)]
 
-    if last_error:
-        raise last_error
-    raise HTTPException(status_code=502, detail="Failed to fetch activities")
+    raise HTTPException(status_code=502, detail="Unexpected activities response")
 
 
 def _fetch_wellness(start: str, end: str) -> list[dict[str, Any]]:
-    candidate_paths = [
-        "/api/v1/wellness",
-        "/api/v1/wellness.json",
-        "/api/v1/athlete/0/wellness",
-        "/api/v1/athlete/0/wellness.json",
-    ]
+    """
+    旧版で実際に動いていた取得方法に合わせる。
+    /athlete/0/wellness + oldest/newest
+    """
+    r = intervals_get("/athlete/0/wellness", params={"oldest": start, "newest": end})
+    data = r.json()
 
-    last_error: HTTPException | None = None
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
 
-    for path in candidate_paths:
-        try:
-            r = intervals_get(path, params={"start": start, "end": end})
-            data = r.json()
-            if isinstance(data, list):
-                return [x for x in data if isinstance(x, dict)]
-            if isinstance(data, dict):
-                for key in ["wellness", "data", "items"]:
-                    v = data.get(key)
-                    if isinstance(v, list):
-                        return [x for x in v if isinstance(x, dict)]
-        except HTTPException as e:
-            last_error = e
-            continue
-
-    if last_error and last_error.status_code != 404:
-        raise last_error
+    if isinstance(data, dict):
+        for key in ["wellness", "data", "items"]:
+            v = data.get(key)
+            if isinstance(v, list):
+                return [x for x in v if isinstance(x, dict)]
 
     return []
 
 
 # =========================
-# Health
+# Basic endpoints
 # =========================
+
+@app.get("/")
+def root() -> dict[str, str]:
+    return {
+        "message": "Intervals.icu relay API is running.",
+        "docs": "/docs",
+        "openapi": "/openapi.json",
+        "health": "/healthz",
+    }
+
 
 @app.get("/healthz")
 def healthz():
@@ -394,22 +389,34 @@ def healthz():
 
 @app.get("/intervals/activities")
 def get_activities(
-    start: str,
-    end: str,
+    start: str = Query(..., description="Start date in YYYY-MM-DD"),
+    end: str = Query(..., description="End date in YYYY-MM-DD"),
     authorization: str | None = Header(default=None),
 ):
     verify_bearer(authorization)
-    return _fetch_activities(start, end)
+
+    start_d = parse_date_yyyy_mm_dd(start)
+    end_d = parse_date_yyyy_mm_dd(end)
+    if start_d > end_d:
+        raise HTTPException(status_code=400, detail="start must be <= end")
+
+    return JSONResponse(content=_fetch_activities(start, end))
 
 
 @app.get("/intervals/wellness")
 def get_wellness(
-    start: str,
-    end: str,
+    start: str = Query(..., description="Start date in YYYY-MM-DD"),
+    end: str = Query(..., description="End date in YYYY-MM-DD"),
     authorization: str | None = Header(default=None),
 ):
     verify_bearer(authorization)
-    return _fetch_wellness(start, end)
+
+    start_d = parse_date_yyyy_mm_dd(start)
+    end_d = parse_date_yyyy_mm_dd(end)
+    if start_d > end_d:
+        raise HTTPException(status_code=400, detail="start must be <= end")
+
+    return JSONResponse(content=_fetch_wellness(start, end))
 
 
 @app.get("/intervals/activity/{activity_id}/streams")
@@ -427,7 +434,7 @@ def get_activity_streams(
     if types:
         params["types"] = types
 
-    r = intervals_get(f"/api/v1/activity/{activity_id}/streams.json", params=params)
+    r = intervals_get(f"/activity/{activity_id}/streams.json", params=params)
     return r.json()
 
 
@@ -444,7 +451,7 @@ def get_activity_streams_csv(
         params["types"] = types
 
     r = intervals_get(
-        f"/api/v1/activity/{activity_id}/streams.csv",
+        f"/activity/{activity_id}/streams.csv",
         params=params,
         accept="text/csv",
     )
@@ -464,7 +471,7 @@ def get_activity_original_file(
 ):
     verify_bearer(authorization)
 
-    r = intervals_get(f"/api/v1/activity/{activity_id}/file")
+    r = intervals_get(f"/activity/{activity_id}/file")
     return Response(
         content=r.content,
         media_type=r.headers.get("content-type", "application/octet-stream"),
@@ -481,7 +488,7 @@ def get_activity_fit_file(
 ):
     verify_bearer(authorization)
 
-    r = intervals_get(f"/api/v1/activity/{activity_id}/fit-file")
+    r = intervals_get(f"/activity/{activity_id}/fit-file")
     return Response(
         content=r.content,
         media_type=r.headers.get("content-type", "application/octet-stream"),
@@ -492,16 +499,21 @@ def get_activity_fit_file(
 
 
 # =========================
-# Existing analysis endpoints
+# Analysis endpoints
 # =========================
 
 @app.get("/analysis/training-quality")
 def analyze_training_quality(
-    start: str,
-    end: str,
+    start: str = Query(..., description="Start date in YYYY-MM-DD"),
+    end: str = Query(..., description="End date in YYYY-MM-DD"),
     authorization: str | None = Header(default=None),
 ):
     verify_bearer(authorization)
+
+    start_d = parse_date_yyyy_mm_dd(start)
+    end_d = parse_date_yyyy_mm_dd(end)
+    if start_d > end_d:
+        raise HTTPException(status_code=400, detail="start must be <= end")
 
     activities = _fetch_activities(start, end)
     wellness = _fetch_wellness(start, end)
@@ -566,11 +578,16 @@ def analyze_training_quality(
 
 @app.get("/analysis/workout-quality")
 def analyze_workout_quality(
-    start: str,
-    end: str,
+    start: str = Query(..., description="YYYY-MM-DD"),
+    end: str = Query(..., description="YYYY-MM-DD"),
     authorization: str | None = Header(default=None),
 ):
     verify_bearer(authorization)
+
+    start_d = parse_date_yyyy_mm_dd(start)
+    end_d = parse_date_yyyy_mm_dd(end)
+    if start_d > end_d:
+        raise HTTPException(status_code=400, detail="start must be <= end")
 
     activities = _fetch_activities(start, end)
     results: list[dict[str, Any]] = []
@@ -604,11 +621,16 @@ def analyze_workout_quality(
 
 @app.get("/analysis/endurance-efficiency")
 def analyze_endurance_efficiency(
-    start: str,
-    end: str,
+    start: str = Query(..., description="YYYY-MM-DD"),
+    end: str = Query(..., description="YYYY-MM-DD"),
     authorization: str | None = Header(default=None),
 ):
     verify_bearer(authorization)
+
+    start_d = parse_date_yyyy_mm_dd(start)
+    end_d = parse_date_yyyy_mm_dd(end)
+    if start_d > end_d:
+        raise HTTPException(status_code=400, detail="start must be <= end")
 
     activities = _fetch_activities(start, end)
     results: list[dict[str, Any]] = []
@@ -661,18 +683,20 @@ def analyze_endurance_efficiency(
 
 @app.get("/analysis/training-quality-timeseries")
 def analyze_training_quality_timeseries(
-    start: str,
-    end: str,
+    start: str = Query(..., description="YYYY-MM-DD"),
+    end: str = Query(..., description="YYYY-MM-DD"),
     granularity: str = Query(default="week", pattern="^(day|week)$"),
     authorization: str | None = Header(default=None),
 ):
     verify_bearer(authorization)
 
-    activities = _fetch_activities(start, end)
-    wellness = _fetch_wellness(start, end)
-
     start_d = parse_date_yyyy_mm_dd(start)
     end_d = parse_date_yyyy_mm_dd(end)
+    if start_d > end_d:
+        raise HTTPException(status_code=400, detail="start must be <= end")
+
+    activities = _fetch_activities(start, end)
+    wellness = _fetch_wellness(start, end)
 
     buckets: dict[str, dict[str, Any]] = {}
 
@@ -728,7 +752,7 @@ def analyze_training_quality_timeseries(
 
     for w in wellness:
         day_str = ""
-        for key in ["date", "day", "wellness_date"]:
+        for key in ["date", "day", "wellness_date", "id", "updated"]:
             val = w.get(key)
             if isinstance(val, str) and len(val) >= 10:
                 day_str = val[:10]
@@ -736,7 +760,11 @@ def analyze_training_quality_timeseries(
         if not day_str:
             continue
 
-        d = parse_date_yyyy_mm_dd(day_str)
+        try:
+            d = parse_date_yyyy_mm_dd(day_str)
+        except HTTPException:
+            continue
+
         key = bucket_key_for(d)
         if key in buckets:
             buckets[key]["wellness_entries"] += 1
@@ -783,7 +811,7 @@ def analyze_training_quality_timeseries(
 
 
 # =========================
-# New detailed analysis endpoint
+# Detailed single-workout analysis
 # =========================
 
 @app.get("/analysis/workout-detail/{activity_id}")
@@ -795,7 +823,7 @@ def analyze_workout_detail(
     verify_bearer(authorization)
 
     r = intervals_get(
-        f"/api/v1/activity/{activity_id}/streams.json",
+        f"/activity/{activity_id}/streams.json",
         params={"types": "time,watts,heartrate,cadence,velocity_smooth"},
     )
     payload = r.json()
@@ -916,17 +944,18 @@ def analyze_workout_detail(
     }
 
 
-# =========================
-# Optional future stub
-# =========================
-
 @app.get("/analysis/endurance-efficiency-detail")
 def analyze_endurance_efficiency_detail(
-    start: str,
-    end: str,
+    start: str = Query(..., description="YYYY-MM-DD"),
+    end: str = Query(..., description="YYYY-MM-DD"),
     authorization: str | None = Header(default=None),
 ):
     verify_bearer(authorization)
+
+    start_d = parse_date_yyyy_mm_dd(start)
+    end_d = parse_date_yyyy_mm_dd(end)
+    if start_d > end_d:
+        raise HTTPException(status_code=400, detail="start must be <= end")
 
     activities = _fetch_activities(start, end)
     results: list[dict[str, Any]] = []
@@ -943,8 +972,6 @@ def analyze_endurance_efficiency_detail(
         if not is_candidate:
             continue
 
-        # まずはsummary fallbackで一覧化し、
-        # 必要なら個別に /analysis/workout-detail/{activity_id} を呼ぶ運用にする
         results.append({
             "activity_id": activity_id,
             "date": _date_from_activity(a),
@@ -967,556 +994,4 @@ def analyze_endurance_efficiency_detail(
             "This endpoint is currently a summary-based candidate list",
             "Detailed EF/decoupling/HR drift should be checked per activity via workout-detail",
         ],
-    }
-    
-def safe_num(x: Any, default: float = 0.0) -> float:
-    try:
-        if x is None:
-            return default
-        return float(x)
-    except (TypeError, ValueError):
-        return default
-
-
-def is_valid_activity(activity: dict[str, Any]) -> bool:
-    return bool(activity.get("moving_time"))
-
-
-def extract_activity_date(activity: dict[str, Any]) -> str | None:
-    raw_date = activity.get("start_date_local") or activity.get("start_date")
-    if not raw_date:
-        return None
-    return str(raw_date)[:10]
-
-
-def extract_activity_datetime(activity: dict[str, Any]) -> datetime | None:
-    raw_date = activity.get("start_date_local") or activity.get("start_date")
-    if not raw_date:
-        return None
-
-    raw_date = str(raw_date)
-    try:
-        return datetime.fromisoformat(raw_date.replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        try:
-            return parse_ymd(raw_date[:10])
-        except HTTPException:
-            return None
-
-
-def detect_workout_type(activity: dict[str, Any]) -> str:
-    name = (activity.get("name") or "").lower()
-    activity_type = (activity.get("type") or "").lower()
-    moving_time = safe_num(activity.get("moving_time"))
-    load = safe_num(activity.get("icu_training_load"))
-    avg_power = safe_num(activity.get("avg_power"))
-    avg_hr = safe_num(activity.get("avg_hr"))
-
-    if "sst" in name:
-        return "sst"
-    if "tempo" in name:
-        return "tempo"
-    if "lt1" in name:
-        return "lt1"
-    if "z2" in name or "zone 2" in name:
-        return "z2"
-    if "threshold" in name:
-        return "threshold"
-    if "vo2" in name or "vo₂" in name:
-        return "vo2max"
-    if "recovery" in name or "easy" in name:
-        return "recovery"
-
-    if moving_time >= 90 * 60 and load <= 90:
-        return "z2_long"
-    if 45 * 60 <= moving_time <= 120 * 60 and 50 <= load <= 90:
-        return "tempo_or_lt1"
-    if 45 * 60 <= moving_time <= 100 * 60 and 75 <= load <= 120:
-        return "sst_or_threshold"
-    if activity_type in {"ride", "virtualride"} and avg_power > 0 and avg_hr > 0:
-        return "endurance_unknown"
-
-    return "unknown"
-
-
-def calc_simple_ef(activity: dict[str, Any]) -> float | None:
-    avg_power = safe_num(activity.get("avg_power"))
-    avg_hr = safe_num(activity.get("avg_hr"))
-
-    if avg_power <= 0 or avg_hr <= 0:
-        return None
-
-    return round(avg_power / avg_hr, 3)
-
-
-def is_endurance_candidate(activity: dict[str, Any]) -> bool:
-    moving_time = safe_num(activity.get("moving_time"))
-    avg_hr = safe_num(activity.get("avg_hr"))
-    avg_power = safe_num(activity.get("avg_power"))
-    wtype = detect_workout_type(activity)
-
-    if moving_time < 40 * 60:
-        return False
-    if avg_hr <= 0 or avg_power <= 0:
-        return False
-
-    return wtype in {
-        "z2", "z2_long", "lt1", "tempo", "sst", "tempo_or_lt1", "endurance_unknown"
-    }
-
-
-def calc_simple_workout_quality(activity: dict[str, Any]) -> dict[str, Any]:
-    moving_time = safe_num(activity.get("moving_time"))
-    load = safe_num(activity.get("icu_training_load"))
-    avg_hr = safe_num(activity.get("avg_hr"))
-    avg_power = safe_num(activity.get("avg_power"))
-    wtype = detect_workout_type(activity)
-
-    strengths: list[str] = []
-    concerns: list[str] = []
-
-    execution_score = 50
-    stability_score = 50
-    cardio_response_score = 50
-
-    if moving_time >= 45 * 60:
-        execution_score += 15
-        strengths.append("十分な実施時間があります")
-    elif moving_time >= 25 * 60:
-        execution_score += 5
-    else:
-        concerns.append("実施時間が短めです")
-
-    if load > 0:
-        execution_score += 10
-
-    if avg_power > 0:
-        stability_score += 15
-        strengths.append("出力データが取得されています")
-    else:
-        concerns.append("出力データが不足しています")
-
-    if avg_hr > 0:
-        cardio_response_score += 10
-    else:
-        concerns.append("心拍データが不足しています")
-
-    if wtype in {"z2", "z2_long", "lt1", "tempo", "tempo_or_lt1"}:
-        if moving_time >= 90 * 60:
-            stability_score += 10
-            strengths.append("持久系ワークアウトとして十分な時間です")
-        if calc_simple_ef(activity) is not None:
-            cardio_response_score += 10
-
-    if wtype in {"sst", "threshold", "sst_or_threshold"}:
-        if 40 * 60 <= moving_time <= 100 * 60:
-            execution_score += 10
-            strengths.append("SST/しきい値系として妥当な時間です")
-        if load >= 70:
-            stability_score += 10
-
-    if wtype == "recovery":
-        if load <= 40:
-            strengths.append("回復目的として負荷は抑えられています")
-        else:
-            concerns.append("回復走としてはやや負荷が高い可能性があります")
-
-    execution_score = max(0, min(100, int(execution_score)))
-    stability_score = max(0, min(100, int(stability_score)))
-    cardio_response_score = max(0, min(100, int(cardio_response_score)))
-
-    quality_score = int(round(
-        execution_score * 0.4 +
-        stability_score * 0.35 +
-        cardio_response_score * 0.25
-    ))
-
-    return {
-        "type_detected": wtype,
-        "quality_score": quality_score,
-        "execution_score": execution_score,
-        "stability_score": stability_score,
-        "cardio_response_score": cardio_response_score,
-        "strengths": strengths[:3],
-        "concerns": concerns[:3],
-        "simple_ef": calc_simple_ef(activity),
-        "note": "summaryベースの暫定評価です。EF/デカップリング/ドリフトの厳密評価には詳細時系列データが必要です。",
-    }
-
-
-@app.get("/")
-def root() -> dict[str, str]:
-    return {
-        "message": "Intervals.icu relay API is running.",
-        "docs": "/docs",
-        "openapi": "/openapi.json",
-        "health": "/healthz",
-    }
-
-
-@app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.get("/intervals/activities")
-def get_activities(
-    start: str = Query(..., description="Start date in YYYY-MM-DD"),
-    end: str = Query(..., description="End date in YYYY-MM-DD"),
-    authorization: str | None = Header(None),
-):
-    require_bearer(authorization)
-    start_dt = parse_ymd(start)
-    end_dt = parse_ymd(end)
-    if start_dt > end_dt:
-        raise HTTPException(status_code=400, detail="start must be <= end")
-
-    data = intervals_get("/athlete/0/activities", {"oldest": start, "newest": end})
-    return JSONResponse(content=data)
-
-
-@app.get("/intervals/wellness")
-def get_wellness(
-    start: str = Query(..., description="Start date in YYYY-MM-DD"),
-    end: str = Query(..., description="End date in YYYY-MM-DD"),
-    authorization: str | None = Header(None),
-):
-    require_bearer(authorization)
-    start_dt = parse_ymd(start)
-    end_dt = parse_ymd(end)
-    if start_dt > end_dt:
-        raise HTTPException(status_code=400, detail="start must be <= end")
-
-    data = intervals_get("/athlete/0/wellness", {"oldest": start, "newest": end})
-    return JSONResponse(content=data)
-
-
-@app.get("/analysis/training-quality")
-def analyze_training_quality(
-    start: str = Query(..., description="Start date in YYYY-MM-DD"),
-    end: str = Query(..., description="End date in YYYY-MM-DD"),
-    authorization: str | None = Header(None),
-):
-    require_bearer(authorization)
-
-    start_dt = parse_ymd(start)
-    end_dt = parse_ymd(end)
-    if start_dt > end_dt:
-        raise HTTPException(status_code=400, detail="start must be <= end")
-
-    activities = intervals_get("/athlete/0/activities", {"oldest": start, "newest": end})
-    wellness = intervals_get("/athlete/0/wellness", {"oldest": start, "newest": end})
-
-    valid_activities = [a for a in activities if is_valid_activity(a)]
-
-    sessions = len(valid_activities)
-    total_duration = sum((a.get("moving_time") or 0) for a in valid_activities)
-    high_load_days = sum(
-        1 for a in valid_activities if (a.get("icu_training_load") or 0) >= 60
-    )
-
-    strengths: list[str] = []
-    concerns: list[str] = []
-
-    if sessions >= 4:
-        strengths.append("実施頻度は十分です")
-    else:
-        concerns.append("実施頻度が少なめです")
-
-    if high_load_days <= 2:
-        strengths.append("高負荷日の密度は過剰ではありません")
-    else:
-        concerns.append("高負荷日が多く、回復不足の可能性があります")
-
-    quality_score = max(
-        0,
-        min(100, 70 + min(sessions, 5) * 4 - max(0, high_load_days - 2) * 8),
-    )
-
-    return {
-        "summary": (
-            f"{start}〜{end}に {sessions} セッション、"
-            f"総運動時間は約 {round(total_duration / 3600, 1)} 時間です。"
-        ),
-        "quality_score": quality_score,
-        "strengths": strengths,
-        "concerns": concerns,
-        "raw_counts": {
-            "sessions": sessions,
-            "high_load_days": high_load_days,
-            "total_duration_seconds": total_duration,
-            "wellness_entries": len(wellness),
-        },
-    }
-
-
-@app.get("/analysis/workout-quality")
-def analyze_workout_quality(
-    start: str = Query(..., description="YYYY-MM-DD"),
-    end: str = Query(..., description="YYYY-MM-DD"),
-    authorization: str | None = Header(None),
-):
-    require_bearer(authorization)
-
-    start_dt = parse_ymd(start)
-    end_dt = parse_ymd(end)
-    if start_dt > end_dt:
-        raise HTTPException(status_code=400, detail="start must be <= end")
-
-    activities = intervals_get("/athlete/0/activities", {"oldest": start, "newest": end})
-    valid_activities = [a for a in activities if is_valid_activity(a)]
-
-    workouts = []
-    for a in valid_activities:
-        quality = calc_simple_workout_quality(a)
-
-        workouts.append({
-            "id": a.get("id"),
-            "date": extract_activity_date(a),
-            "name": a.get("name"),
-            "type": a.get("type"),
-            "moving_time": a.get("moving_time"),
-            "icu_training_load": a.get("icu_training_load"),
-            "avg_power": a.get("avg_power"),
-            "avg_hr": a.get("avg_hr"),
-            **quality,
-        })
-
-    avg_quality = round(mean([w["quality_score"] for w in workouts]), 1) if workouts else None
-
-    return {
-        "summary": f"{start}〜{end}の {len(workouts)} 件のワークアウトを暫定評価しました。",
-        "average_quality_score": avg_quality,
-        "workouts": workouts,
-    }
-
-
-@app.get("/analysis/endurance-efficiency")
-def analyze_endurance_efficiency(
-    start: str = Query(..., description="YYYY-MM-DD"),
-    end: str = Query(..., description="YYYY-MM-DD"),
-    authorization: str | None = Header(None),
-):
-    require_bearer(authorization)
-
-    start_dt = parse_ymd(start)
-    end_dt = parse_ymd(end)
-    if start_dt > end_dt:
-        raise HTTPException(status_code=400, detail="start must be <= end")
-
-    activities = intervals_get("/athlete/0/activities", {"oldest": start, "newest": end})
-    valid_activities = [a for a in activities if is_valid_activity(a)]
-    candidates = [a for a in valid_activities if is_endurance_candidate(a)]
-
-    items = []
-    ef_values = []
-
-    for a in candidates:
-        ef = calc_simple_ef(a)
-        if ef is not None:
-            ef_values.append(ef)
-
-        duration_min = round(safe_num(a.get("moving_time")) / 60, 1)
-        load = safe_num(a.get("icu_training_load"))
-
-        rating = "insufficient_data"
-        if ef is not None:
-            if duration_min >= 90 and load <= 90:
-                rating = "good"
-            else:
-                rating = "usable"
-
-        items.append({
-            "id": a.get("id"),
-            "date": extract_activity_date(a),
-            "name": a.get("name"),
-            "type_detected": detect_workout_type(a),
-            "duration_minutes": duration_min,
-            "avg_power": a.get("avg_power"),
-            "avg_hr": a.get("avg_hr"),
-            "simple_ef": ef,
-            "decoupling_pct": None,
-            "hr_drift_pct": None,
-            "rating": rating,
-            "note": "現段階ではsummaryベースの簡易EFのみ。詳細版では時系列データからdecoupling/hr driftを計算します。",
-        })
-
-    avg_ef = round(mean(ef_values), 3) if ef_values else None
-
-    return {
-        "summary": f"{start}〜{end}で持久効率評価候補は {len(items)} 件です。",
-        "average_simple_ef": avg_ef,
-        "items": items,
-    }
-
-
-@app.get("/analysis/training-quality-timeseries")
-def analyze_training_quality_timeseries(
-    start: str = Query(..., description="YYYY-MM-DD"),
-    end: str = Query(..., description="YYYY-MM-DD"),
-    granularity: str = Query("week", description="day or week"),
-    authorization: str | None = Header(None),
-):
-    require_bearer(authorization)
-
-    start_dt = parse_ymd(start)
-    end_dt = parse_ymd(end)
-    if start_dt > end_dt:
-        raise HTTPException(status_code=400, detail="start must be <= end")
-    if granularity not in {"day", "week"}:
-        raise HTTPException(status_code=400, detail="granularity must be 'day' or 'week'")
-
-    activities = intervals_get("/athlete/0/activities", {"oldest": start, "newest": end})
-    wellness = intervals_get("/athlete/0/wellness", {"oldest": start, "newest": end})
-
-    valid_activities = [a for a in activities if is_valid_activity(a)]
-
-    grouped_activities: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    grouped_wellness: dict[str, list[dict[str, Any]]] = defaultdict(list)
-
-    def bucket_key(dt: datetime) -> str:
-        if granularity == "day":
-            return date_to_ymd(dt)
-        monday = dt - timedelta(days=dt.weekday())
-        return date_to_ymd(monday)
-
-    for a in valid_activities:
-        dt = extract_activity_datetime(a)
-        if dt is None:
-            continue
-        grouped_activities[bucket_key(dt)].append(a)
-
-    for w in wellness:
-        raw_date = w.get("id") or w.get("date") or w.get("updated")
-        if not raw_date:
-            continue
-        raw_date = str(raw_date)[:10]
-        try:
-            dt = parse_ymd(raw_date)
-        except HTTPException:
-            continue
-        grouped_wellness[bucket_key(dt)].append(w)
-
-    current = start_dt
-    points = []
-    seen_keys: set[str] = set()
-
-    while current <= end_dt:
-        key = bucket_key(current)
-        if key not in seen_keys:
-            acts = grouped_activities.get(key, [])
-            wells = grouped_wellness.get(key, [])
-
-            sessions = len(acts)
-            total_duration = sum(safe_num(a.get("moving_time")) for a in acts)
-            high_load_days = sum(1 for a in acts if safe_num(a.get("icu_training_load")) >= 60)
-
-            workout_scores = [calc_simple_workout_quality(a)["quality_score"] for a in acts]
-            ef_candidates = [calc_simple_ef(a) for a in acts]
-            ef_values = [x for x in ef_candidates if x is not None]
-
-            avg_workout_quality = round(mean(workout_scores), 1) if workout_scores else None
-            avg_endurance_ef = round(mean(ef_values), 3) if ef_values else None
-
-            quality_score = max(
-                0,
-                min(100, 70 + min(sessions, 5) * 4 - max(0, high_load_days - 2) * 8)
-            )
-
-            points.append({
-                "period_start": key,
-                "sessions": sessions,
-                "total_duration_seconds": int(total_duration),
-                "high_load_days": high_load_days,
-                "avg_workout_quality": avg_workout_quality,
-                "avg_endurance_ef": avg_endurance_ef,
-                "wellness_entries": len(wells),
-                "quality_score": quality_score,
-            })
-            seen_keys.add(key)
-
-        if granularity == "day":
-            current += timedelta(days=1)
-        else:
-            current += timedelta(days=7)
-
-    return {
-        "summary": f"{start}〜{end}を {granularity} 単位で品質評価しました。",
-        "granularity": granularity,
-        "points": points,
-    }
-
-@app.get("/intervals/activities")
-def get_activities(
-    start: str = Query(..., description="Start date in YYYY-MM-DD"),
-    end: str = Query(..., description="End date in YYYY-MM-DD"),
-    authorization: str | None = Header(None),
-):
-    require_bearer(authorization)
-    data = intervals_get("/athlete/0/activities", {"oldest": start, "newest": end})
-    return JSONResponse(content=data)
-
-
-@app.get("/intervals/wellness")
-def get_wellness(
-    start: str = Query(..., description="Start date in YYYY-MM-DD"),
-    end: str = Query(..., description="End date in YYYY-MM-DD"),
-    authorization: str | None = Header(None),
-):
-    require_bearer(authorization)
-    data = intervals_get("/athlete/0/wellness", {"oldest": start, "newest": end})
-    return JSONResponse(content=data)
-
-
-@app.get("/analysis/training-quality")
-def analyze_training_quality(
-    start: str = Query(..., description="Start date in YYYY-MM-DD"),
-    end: str = Query(..., description="End date in YYYY-MM-DD"),
-    authorization: str | None = Header(None),
-):
-    require_bearer(authorization)
-
-    activities = intervals_get("/athlete/0/activities", {"oldest": start, "newest": end})
-    wellness = intervals_get("/athlete/0/wellness", {"oldest": start, "newest": end})
-
-    valid_activities = [a for a in activities if a.get("moving_time")]
-
-    sessions = len(valid_activities)
-    total_duration = sum((a.get("moving_time") or 0) for a in valid_activities)
-    high_load_days = sum(
-        1 for a in valid_activities if (a.get("icu_training_load") or 0) >= 60
-    )
-
-    strengths: list[str] = []
-    concerns: list[str] = []
-
-    if sessions >= 4:
-        strengths.append("実施頻度は十分です")
-    else:
-        concerns.append("実施頻度が少なめです")
-
-    if high_load_days <= 2:
-        strengths.append("高負荷日の密度は過剰ではありません")
-    else:
-        concerns.append("高負荷日が多く、回復不足の可能性があります")
-
-    quality_score = max(
-        0,
-        min(100, 70 + min(sessions, 5) * 4 - max(0, high_load_days - 2) * 8),
-    )
-
-    return {
-        "summary": (
-            f"{start}〜{end}に {sessions} セッション、"
-            f"総運動時間は約 {round(total_duration / 3600, 1)} 時間です。"
-        ),
-        "quality_score": quality_score,
-        "strengths": strengths,
-        "concerns": concerns,
-        "raw_counts": {
-            "sessions": sessions,
-            "high_load_days": high_load_days,
-            "total_duration_seconds": total_duration,
-            "wellness_entries": len(wellness),
-        },
     }
