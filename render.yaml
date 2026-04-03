@@ -1,17 +1,16 @@
 services:
   - type: web
     name: intervals-icu-relay
-    runtime: python
+    env: python
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /healthz
     envVars:
       - key: INTERNAL_TOKEN
         sync: false
       - key: INTERVALS_API_KEY
         sync: false
       - key: INTERVALS_BASE_URL
-        value: https://intervals.icu/api/v1
+        value: https://intervals.icu
       - key: REQUEST_TIMEOUT_SECONDS
-        value: "20"
+        value: 30
