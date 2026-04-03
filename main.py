@@ -967,7 +967,9 @@ def analyze_endurance_efficiency_detail(
             "This endpoint is currently a summary-based candidate list",
             "Detailed EF/decoupling/HR drift should be checked per activity via workout-detail",
         ],
-    }def safe_num(x: Any, default: float = 0.0) -> float:
+    }
+    
+def safe_num(x: Any, default: float = 0.0) -> float:
     try:
         if x is None:
             return default
