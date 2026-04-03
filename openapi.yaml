@@ -1,84 +1,325 @@
 openapi: 3.1.0
 info:
-  title: Intervals ICU Relay API
-  version: 1.1.0
-  description: |
-    Relay API for ChatGPT Actions.
-    ChatGPT authenticates to this API with a Bearer token.
-    This API then calls Intervals.icu using Basic authentication.
+  title: Intervals.icu Relay API
+  version: 0.3.0
+
 servers:
   - url: https://intervals-icu-relay.onrender.com
-    description: Render production URL
 
-components:
-  schemas: {}
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
+security:
+  - bearerAuth: []
 
 paths:
   /healthz:
     get:
       operationId: healthCheck
       summary: Health check
-      description: Returns API health status.
       responses:
-        '200':
-          description: Successful health response
+        "200":
+          description: OK
           content:
             application/json:
               schema:
                 type: object
+                properties: {}
                 additionalProperties: true
 
   /intervals/activities:
     get:
       operationId: getActivities
-      summary: Get activities from Intervals.icu
-      security:
-        - bearerAuth: []
+      summary: Get activities for a date range
       parameters:
         - name: start
           in: query
           required: true
-          description: Start date in YYYY-MM-DD
           schema:
             type: string
             format: date
         - name: end
           in: query
           required: true
-          description: End date in YYYY-MM-DD
           schema:
             type: string
             format: date
       responses:
-        '200':
-          description: Activities fetched successfully
+        "200":
+          description: Activities
           content:
             application/json:
               schema:
                 type: array
                 items:
                   type: object
+                  properties: {}
                   additionalProperties: true
 
   /intervals/wellness:
     get:
       operationId: getWellness
-      summary: Get wellness entries from Intervals.icu
-      security:
-        - bearerAuth: []
+      summary: Get wellness entries for a date range
       parameters:
         - name: start
           in: query
           required: true
-          description: Start date in YYYY-MM-DD
           schema:
             type: string
             format: date
         - name: end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Wellness
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties: {}
+                  additionalProperties: true
+
+  /intervals/activity/{activity_id}/streams:
+    get:
+      operationId: getActivityStreams
+      summary: Get activity streams as JSON
+      parameters:
+        - name: activity_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: types
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated stream types
+      responses:
+        "200":
+          description: Streams
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+                additionalProperties: true
+
+  /intervals/activity/{activity_id}/file:
+    get:
+      operationId: getActivityOriginalFile
+      summary: Download original activity file
+      parameters:
+        - name: activity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Original file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /intervals/activity/{activity_id}/fit-file:
+    get:
+      operationId: getActivityFitFile
+      summary: Download Intervals generated FIT file
+      parameters:
+        - name: activity_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: FIT file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /analysis/training-quality:
+    get:
+      operationId: analyzeTrainingQuality
+      summary: Analyze training quality for a date range
+      parameters:
+        - name: start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Training quality analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+                additionalProperties: true
+
+  /analysis/workout-quality:
+    get:
+      operationId: analyzeWorkoutQuality
+      summary: Analyze workout quality for a date range
+      parameters:
+        - name: start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Workout quality analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+                additionalProperties: true
+
+  /analysis/endurance-efficiency:
+    get:
+      operationId: analyzeEnduranceEfficiency
+      summary: Analyze endurance efficiency for a date range
+      parameters:
+        - name: start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Endurance efficiency analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+                additionalProperties: true
+
+  /analysis/training-quality-timeseries:
+    get:
+      operationId: analyzeTrainingQualityTimeseries
+      summary: Analyze training quality over time
+      parameters:
+        - name: start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: granularity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [day, week]
+            default: week
+      responses:
+        "200":
+          description: Time series analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+                additionalProperties: true
+
+  /analysis/workout-detail/{activity_id}:
+    get:
+      operationId: analyzeWorkoutDetail
+      summary: Analyze a single workout from detailed streams
+      parameters:
+        - name: activity_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: warmup_exclude_seconds
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 600
+      responses:
+        "200":
+          description: Detailed workout analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+                additionalProperties: true
+
+  /analysis/endurance-efficiency-detail:
+    get:
+      operationId: analyzeEnduranceEfficiencyDetail
+      summary: List endurance candidates for detailed review
+      parameters:
+        - name: start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Detailed endurance candidate list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: {}
+                additionalProperties: true
+
+components:
+  schemas: {}
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer        - name: end
           in: query
           required: true
           description: End date in YYYY-MM-DD
