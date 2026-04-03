@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Intervals.icu Relay API
-  version: 0.3.0
+  version: 0.4.0
 
 servers:
   - url: https://intervals-icu-relay.onrender.com
@@ -21,7 +21,6 @@ paths:
             application/json:
               schema:
                 type: object
-                properties: {}
                 additionalProperties: true
 
   /intervals/activities:
@@ -32,26 +31,33 @@ paths:
         - name: start
           in: query
           required: true
+          description: Start date in YYYY-MM-DD
           schema:
             type: string
             format: date
         - name: end
           in: query
           required: true
+          description: End date in YYYY-MM-DD
           schema:
             type: string
             format: date
       responses:
         "200":
-          description: Activities
+          description: Activities fetched successfully
           content:
             application/json:
               schema:
                 type: array
                 items:
                   type: object
-                  properties: {}
                   additionalProperties: true
+        "400":
+          description: Invalid date range
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
 
   /intervals/wellness:
     get:
@@ -61,26 +67,33 @@ paths:
         - name: start
           in: query
           required: true
+          description: Start date in YYYY-MM-DD
           schema:
             type: string
             format: date
         - name: end
           in: query
           required: true
+          description: End date in YYYY-MM-DD
           schema:
             type: string
             format: date
       responses:
         "200":
-          description: Wellness
+          description: Wellness entries fetched successfully
           content:
             application/json:
               schema:
                 type: array
                 items:
                   type: object
-                  properties: {}
                   additionalProperties: true
+        "400":
+          description: Invalid date range
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
 
   /intervals/activity/{activity_id}/streams:
     get:
@@ -95,18 +108,21 @@ paths:
         - name: types
           in: query
           required: false
+          description: Comma-separated stream types, e.g. watts,heartrate,cadence,time,distance
           schema:
             type: string
-          description: Comma-separated stream types
       responses:
         "200":
-          description: Streams
+          description: Streams fetched successfully
           content:
             application/json:
               schema:
                 type: object
-                properties: {}
                 additionalProperties: true
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
 
   /intervals/activity/{activity_id}/file:
     get:
@@ -120,12 +136,16 @@ paths:
             type: string
       responses:
         "200":
-          description: Original file
+          description: Original file downloaded successfully
           content:
             application/octet-stream:
               schema:
                 type: string
                 format: binary
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
 
   /intervals/activity/{activity_id}/fit-file:
     get:
@@ -139,210 +159,25 @@ paths:
             type: string
       responses:
         "200":
-          description: FIT file
+          description: FIT file downloaded successfully
           content:
             application/octet-stream:
               schema:
                 type: string
                 format: binary
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
 
   /analysis/training-quality:
     get:
       operationId: analyzeTrainingQuality
       summary: Analyze training quality for a date range
-      parameters:
-        - name: start
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-        - name: end
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-      responses:
-        "200":
-          description: Training quality analysis
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: {}
-                additionalProperties: true
-
-  /analysis/workout-quality:
-    get:
-      operationId: analyzeWorkoutQuality
-      summary: Analyze workout quality for a date range
-      parameters:
-        - name: start
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-        - name: end
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-      responses:
-        "200":
-          description: Workout quality analysis
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: {}
-                additionalProperties: true
-
-  /analysis/endurance-efficiency:
-    get:
-      operationId: analyzeEnduranceEfficiency
-      summary: Analyze endurance efficiency for a date range
-      parameters:
-        - name: start
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-        - name: end
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-      responses:
-        "200":
-          description: Endurance efficiency analysis
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: {}
-                additionalProperties: true
-
-  /analysis/training-quality-timeseries:
-    get:
-      operationId: analyzeTrainingQualityTimeseries
-      summary: Analyze training quality over time
-      parameters:
-        - name: start
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-        - name: end
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-        - name: granularity
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: [day, week]
-            default: week
-      responses:
-        "200":
-          description: Time series analysis
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: {}
-                additionalProperties: true
-
-  /analysis/workout-detail/{activity_id}:
-    get:
-      operationId: analyzeWorkoutDetail
-      summary: Analyze a single workout from detailed streams
-      parameters:
-        - name: activity_id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: warmup_exclude_seconds
-          in: query
-          required: false
-          schema:
-            type: integer
-            default: 600
-      responses:
-        "200":
-          description: Detailed workout analysis
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: {}
-                additionalProperties: true
-
-  /analysis/endurance-efficiency-detail:
-    get:
-      operationId: analyzeEnduranceEfficiencyDetail
-      summary: List endurance candidates for detailed review
-      parameters:
-        - name: start
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-        - name: end
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
-      responses:
-        "200":
-          description: Detailed endurance candidate list
-          content:
-            application/json:
-              schema:
-                type: object
-                properties: {}
-                additionalProperties: true
-
-components:
-  schemas: {}
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer        - name: end
-          in: query
-          required: true
-          description: End date in YYYY-MM-DD
-          schema:
-            type: string
-            format: date
-      responses:
-        '200':
-          description: Wellness entries fetched successfully
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  additionalProperties: true
-
-  /analysis/training-quality:
-    get:
-      operationId: analyzeTrainingQuality
-      summary: Analyze training quality for a date range
-      security:
-        - bearerAuth: []
+      description: >
+        Fetches activities and wellness entries, filters to activities with moving_time,
+        counts high-load days using icu_training_load >= 60,
+        and returns a summary-based training quality overview.
       parameters:
         - name: start
           in: query
@@ -359,20 +194,27 @@ components:
             type: string
             format: date
       responses:
-        '200':
+        "200":
           description: Training quality analysis result
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
+        "400":
+          description: Invalid date range
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
 
   /analysis/workout-quality:
     get:
       operationId: analyzeWorkoutQuality
-      summary: Analyze workout quality in a date range
-      security:
-        - bearerAuth: []
+      summary: Analyze workout quality for a date range
+      description: >
+        Summary-based provisional workout quality analysis.
+        Does not perform block-level evaluation for repeated LT1, tempo, or SST intervals.
       parameters:
         - name: start
           in: query
@@ -389,20 +231,27 @@ components:
             type: string
             format: date
       responses:
-        '200':
+        "200":
           description: Workout quality analysis result
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
+        "400":
+          description: Invalid date range
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
 
   /analysis/endurance-efficiency:
     get:
       operationId: analyzeEnduranceEfficiency
-      summary: Analyze endurance efficiency in a date range
-      security:
-        - bearerAuth: []
+      summary: Analyze endurance efficiency for a date range
+      description: >
+        Summary-based provisional endurance efficiency analysis.
+        Returns simple EF estimates, but does not calculate true decoupling or HR drift.
       parameters:
         - name: start
           in: query
@@ -419,20 +268,25 @@ components:
             type: string
             format: date
       responses:
-        '200':
+        "200":
           description: Endurance efficiency analysis result
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
+        "400":
+          description: Invalid date range
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
 
   /analysis/training-quality-timeseries:
     get:
       operationId: analyzeTrainingQualityTimeseries
       summary: Analyze training quality over time
-      security:
-        - bearerAuth: []
+      description: Summary-based training quality time series by day or week
       parameters:
         - name: start
           in: query
@@ -457,47 +311,63 @@ components:
             enum: [day, week]
             default: week
       responses:
-        '200':
-          description: Time series quality analysis result
+        "200":
+          description: Time series analysis result
           content:
             application/json:
               schema:
                 type: object
-                additionalProperties: true          description: Start date in YYYY-MM-DD
-          schema:
-            type: string
-            format: date
-        - name: end
-          in: query
+                additionalProperties: true
+        "400":
+          description: Invalid date range
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
+
+  /analysis/workout-detail/{activity_id}:
+    get:
+      operationId: analyzeWorkoutDetail
+      summary: Analyze a single workout from detailed streams
+      description: >
+        Streams-based single workout detail analysis.
+        Evaluates the whole filtered activity and estimates EF, decoupling, and HR drift.
+        Does not perform explicit lap or interval segmentation.
+      parameters:
+        - name: activity_id
+          in: path
           required: true
-          description: End date in YYYY-MM-DD
           schema:
             type: string
-            format: date
+        - name: warmup_exclude_seconds
+          in: query
+          required: false
+          description: Seconds to exclude from the beginning of the activity
+          schema:
+            type: integer
+            default: 600
+            minimum: 0
+            maximum: 3600
       responses:
-        '200':
-          description: Wellness entries fetched successfully
+        "200":
+          description: Detailed workout analysis result
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: object
-                  additionalProperties: true
-        '401':
+                type: object
+                additionalProperties: true
+        "401":
           description: Missing or invalid bearer token
-        '502':
+        "502":
           description: Upstream Intervals.icu error
-  /analysis/training-quality:
+
+  /analysis/endurance-efficiency-detail:
     get:
-      operationId: analyzeTrainingQuality
-      summary: Analyze training quality for a date range
-      description: |
-        Fetches activities and wellness entries, filters to activities with moving_time,
-        counts high-load days using icu_training_load >= 60,
-        and returns a simple training quality summary.
-      security:
-        - bearerAuth: []
+      operationId: analyzeEnduranceEfficiencyDetail
+      summary: List endurance candidates for detailed review
+      description: >
+        Summary-based candidate list for endurance workouts.
+        Use analyzeWorkoutDetail on an individual activity for streams-based detailed review.
       parameters:
         - name: start
           in: query
@@ -514,39 +384,220 @@ components:
             type: string
             format: date
       responses:
-        '200':
-          description: Analysis generated successfully
+        "200":
+          description: Detailed endurance candidate list
           content:
             application/json:
               schema:
                 type: object
-                properties:
-                  summary:
-                    type: string
-                    example: 2026-03-25〜2026-03-31に 6 セッション、総運動時間は約 4.0 時間です。
-                  quality_score:
-                    type: integer
-                    example: 90
-                  strengths:
-                    type: array
-                    items:
-                      type: string
-                  concerns:
-                    type: array
-                    items:
-                      type: string
-                  raw_counts:
-                    type: object
-                    properties:
-                      sessions:
-                        type: integer
-                      high_load_days:
-                        type: integer
-                      total_duration_seconds:
-                        type: integer
-                      wellness_entries:
-                        type: integer
-        '401':
+                additionalProperties: true
+        "400":
+          description: Invalid date range
+        "401":
           description: Missing or invalid bearer token
-        '502':
+        "502":
           description: Upstream Intervals.icu error
+
+  /analysis/workout-block-quality:
+    post:
+      operationId: analyzeWorkoutBlockQuality
+      summary: Analyze user-specified workout blocks from detailed streams
+      description: >
+        Streams-based block-level workout analysis.
+        The caller specifies block start and end times in seconds.
+        Returns per-block EF, power/HR stability, estimated drift/decoupling, and between-block fade.
+        Block boundaries are user-specified and are not auto-detected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WorkoutBlockQualityRequest"
+      responses:
+        "200":
+          description: Block-level workout analysis result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkoutBlockQualityResponse"
+        "400":
+          description: Invalid block request
+        "401":
+          description: Missing or invalid bearer token
+        "502":
+          description: Upstream Intervals.icu error
+
+components:
+  schemas:
+    WorkoutBlock:
+      type: object
+      required:
+        - start_sec
+        - end_sec
+      properties:
+        start_sec:
+          type: integer
+          minimum: 0
+          description: Block start time in seconds from activity start
+        end_sec:
+          type: integer
+          minimum: 1
+          description: Block end time in seconds from activity start
+        label:
+          type: string
+          nullable: true
+          description: Optional block label
+
+    WorkoutBlockQualityRequest:
+      type: object
+      required:
+        - activity_id
+        - blocks
+      properties:
+        activity_id:
+          type: string
+          description: Intervals.icu activity ID
+        blocks:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/WorkoutBlock"
+
+    BlockAnalysisResult:
+      type: object
+      properties:
+        index:
+          type: integer
+        label:
+          type: string
+        start_sec:
+          type: integer
+        end_sec:
+          type: integer
+        duration_sec:
+          type: integer
+        avg_power:
+          type: number
+          nullable: true
+        avg_hr:
+          type: number
+          nullable: true
+        avg_cadence:
+          type: number
+          nullable: true
+        avg_speed_mps:
+          type: number
+          nullable: true
+        ef:
+          type: number
+          nullable: true
+        power_cv:
+          type: number
+          nullable: true
+        hr_cv:
+          type: number
+          nullable: true
+        cadence_cv:
+          type: number
+          nullable: true
+        power_variation_pct:
+          type: number
+          nullable: true
+        negative_split_power_pct:
+          type: number
+          nullable: true
+        negative_split_hr_pct:
+          type: number
+          nullable: true
+        drift_pct:
+          type: number
+          nullable: true
+        decoupling_pct:
+          type: number
+          nullable: true
+        stability_score:
+          type: number
+          nullable: true
+        block_quality_label:
+          type: string
+          nullable: true
+
+    BlockDropItem:
+      type: object
+      properties:
+        label:
+          type: string
+        drop_pct:
+          type: number
+          nullable: true
+
+    BetweenBlockComparison:
+      type: object
+      properties:
+        power_drop_from_first_pct:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockDropItem"
+        ef_drop_from_first_pct:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockDropItem"
+
+    BlockSummary:
+      type: object
+      properties:
+        best_block_label:
+          type: string
+          nullable: true
+        worst_block_label:
+          type: string
+          nullable: true
+        consistency_assessment:
+          type: string
+          nullable: true
+        overall_block_quality:
+          type: string
+          nullable: true
+
+    WorkoutBlockQualityResponse:
+      type: object
+      required:
+        - activity_id
+        - analysis_basis
+        - available_streams
+        - block_count
+        - blocks_analyzed
+        - limitations
+      properties:
+        activity_id:
+          type: string
+        analysis_basis:
+          type: string
+          enum: [streams, unavailable]
+        available_streams:
+          type: array
+          items:
+            type: string
+        block_count:
+          type: integer
+        blocks_analyzed:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockAnalysisResult"
+        between_block_comparison:
+          allOf:
+            - $ref: "#/components/schemas/BetweenBlockComparison"
+          nullable: true
+        summary:
+          allOf:
+            - $ref: "#/components/schemas/BlockSummary"
+          nullable: true
+        limitations:
+          type: array
+          items:
+            type: string
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
